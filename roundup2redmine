@@ -1,0 +1,77 @@
+#!/usr/bin/env python
+
+import os
+import sqlite3
+import psycopg2
+from email.header import decode_header
+import dateutil.parser
+
+_ROUNDUP_PATH = './db/'
+_ROUNDUP_DB = os.path.join(_ROUNDUP_PATH, 'db')
+_ROUNDUP_FILES = os.path.join(_ROUNDUP_PATH, 'files/')
+
+_ROUNDUP_SQL_FETCH_USERS = 'SELECT _activity, _address, _creation, _realname, _roles, _username from _user;'
+
+_REDMINE_DB = {
+    'database': 'redmine_default',
+    'user': 'redmine',
+    'password': 'redmine',
+    'host': 'localhost',
+}
+
+_REDMINE_SQL_ADD_USER = "INSERT INTO users (login, firstname, lastname, mail, created_on, updated_on, last_login_on, type) VALUES(%(username)s, %(firstname)s, %(lastname)s, %(mail)s, %(created)s, %(created)s, %(loggedin)s, 'User' );"
+
+
+def _decode_mime(string):
+    """
+    Our database contains a lot of MIME-misscodings.
+    Try hard to decode these.
+    """
+    try:
+        dh = decode_header(string)
+        default_charset = 'ASCII'
+        return ''.join([unicode(t[0], t[1] or default_charset) for t in dh])
+    except:
+        return string
+
+
+def _decode_roundup_date(string):
+    """
+    Roundup stores dates as yyyymmddHHMMx,
+    with x being a float representation of seconds WITHOUT leading zero.
+    Let's just kill the seconds, noone cares about them anyways.
+    """
+    string = string[:12]
+    dt = dateutil.parser.parse(string)
+    return dt
+
+
+_roundup_db = sqlite3.connect(_ROUNDUP_DB)
+_redmine_db = psycopg2.connect(**_REDMINE_DB)
+_redmine_dbc = _redmine_db.cursor()
+
+_roundup_dbc = _roundup_db.execute(_ROUNDUP_SQL_FETCH_USERS)
+for user in _roundup_dbc.fetchall():
+    username = _decode_mime(user[5])
+    if username in ["admin", "anonymous"]:
+        continue
+    mail = _decode_mime(user[1])
+    lasttime = _decode_roundup_date(user[0])
+    creationtime = _decode_roundup_date(user[2])
+    if user[3]:
+        try:
+            firstname, lastname = _decode_mime(user[3]).split(" ", 1)
+        except:
+            firstname, lastname = _decode_mime(user[3]), ""
+    else:
+        firstname, lastname = _decode_mime(user[5]), ""
+    print username, mail, firstname, lastname, lasttime
+    data = {'username': username, 'firstname': firstname,
+            'lastname': lastname, 'mail': mail, 'created': creationtime,
+            'loggedin': lasttime}
+    _redmine_dbc.execute(_REDMINE_SQL_ADD_USER, data)
+
+_redmine_db.commit()
+_redmine_db.close()
+
+_roundup_db.close()
