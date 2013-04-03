@@ -11,6 +11,10 @@ _ROUNDUP_DB = os.path.join(_ROUNDUP_PATH, 'db')
 _ROUNDUP_FILES = os.path.join(_ROUNDUP_PATH, 'files/')
 
 _ROUNDUP_SQL_FETCH_USERS = 'SELECT _activity, _address, _creation, _realname, _roles, _username from _user;'
+_ROUNDUP_SQL_FETCH_USER = 'SELECT _address, _username from _user where id=?;'
+_ROUNDUP_SQL_FETCH_STATUS = 'SELECT _name from _status where id=?;'
+_ROUNDUP_SQL_FETCH_PRIORITY = 'SELECT _name from _priority where id=?;'
+_ROUNDUP_SQL_FETCH_ISSUES = 'SELECT _activity, _actor, _assignedto, _creation, _creator, _priority, _status, _title, id from _issue;'
 
 _REDMINE_DB = {
     'database': 'redmine_default',
@@ -18,8 +22,43 @@ _REDMINE_DB = {
     'password': 'redmine',
     'host': 'localhost',
 }
+_REDMINE_TRACKER_ID = 1
+_REDMINE_PROJECT_ID = 1
 
 _REDMINE_SQL_ADD_USER = "INSERT INTO users (login, firstname, lastname, mail, created_on, updated_on, last_login_on, type) VALUES(%(username)s, %(firstname)s, %(lastname)s, %(mail)s, %(created)s, %(created)s, %(loggedin)s, 'User' );"
+_REDMINE_SQL_FETCH_USER = "SELECT id FROM users WHERE login=%(login)s AND mail=%(mail)s;"
+_REDMINE_SQL_FETCH_STATUS = "SELECT id FROM issue_statuses WHERE name=%(name)s;"
+_REDMINE_SQL_FETCH_PRIORITY = "SELECT id FROM enumerations WHERE name=%(name)s AND type='IssuePriority';"
+_REDMINE_SQL_ADD_ISSUE = "INSERT INTO issues (tracker_id, project_id, subject, description, status_id, assigned_to_id, priority_id, author_id, created_on, updated_on, lft, rgt) VALUES(%(tracker)s, %(project)s, %(title)s, '', %(status)s, %(assignedto)s, %(priority)s, %(author)s, %(created)s, %(activity)s, %(left)s, %(right)s);"
+
+_status_map = {
+    'unread': 'New',
+    'deferred': 'New',  # wrong
+    'chatting': 'In Progress',  # wrong
+    'need-eg': 'In Progress',  # wrong
+    'in-progress': 'In Progress',
+    'testing': 'In Progress',  # wrong
+    'done-cbb': 'Resolved',  # wrong
+    'resolved': 'Closed',  # yes, really
+    'wont-fix': 'Rejected',
+    'fixed-in-git': 'Resolved',  # wrong
+    'needs-progress': 'In Progress',  # wrong
+    'dead': 'Closed',  # wrong
+}
+
+_priority_map = {  # most not perfect
+    'critical': 'Urgent',
+    'urgent': 'High',
+    'bug': 'Normal',
+    'feature': 'Low',
+    'wish': 'Low',
+    'package': 'Low',
+    'fixed-in-git': 'Normal',
+}
+
+_users = {}
+_status = {}
+_priority = {}
 
 
 def _decode_mime(string):
@@ -46,11 +85,69 @@ def _decode_roundup_date(string):
     return dt
 
 
+def _roundup_user_to_redmine_user(uid):
+    global _users
+    if not uid:
+        return 0
+    if uid in _users:
+        return _users[uid]
+    _roundup_dbc.execute(_ROUNDUP_SQL_FETCH_USER, (uid,))
+    r = _roundup_dbc.fetchone()
+    d = {'login': _decode_mime(r[1]), 'mail': r[0]}
+    _redmine_dbc.execute(_REDMINE_SQL_FETCH_USER, d)
+    r = _redmine_dbc.fetchone()
+    if r:
+        _users[uid] = r[0]
+        return r[0]
+    else:
+        return 0
+
+
+def _roundup_status_to_redmine_status(sid):
+    global _status
+    if sid in _status:
+        return _status[sid]
+    _roundup_dbc.execute(_ROUNDUP_SQL_FETCH_STATUS, (sid,))
+    r = _roundup_dbc.fetchone()
+    if r[0] not in _status_map:
+        return 0
+    s = _status_map[r[0]]
+    d = {'name': s}
+    _redmine_dbc.execute(_REDMINE_SQL_FETCH_STATUS, d)
+    r = _redmine_dbc.fetchone()
+    if r:
+        _status[sid] = r[0]
+        return r[0]
+    else:
+        return 0
+
+
+def _roundup_priority_to_redmine_priority(pid):
+    global _priority
+    if not pid:
+        return 0
+    if pid in _priority:
+        return _priority[pid]
+    _roundup_dbc.execute(_ROUNDUP_SQL_FETCH_PRIORITY, (pid,))
+    r = _roundup_dbc.fetchone()
+    if r[0] not in _priority_map:
+        return 0
+    p = _priority_map[r[0]]
+    d = {'name': p}
+    _redmine_dbc.execute(_REDMINE_SQL_FETCH_PRIORITY, d)
+    r = _redmine_dbc.fetchone()
+    if r:
+        _priority[pid] = r[0]
+        return r[0]
+    else:
+        return 0
+
 _roundup_db = sqlite3.connect(_ROUNDUP_DB)
+_roundup_dbc = _roundup_db.cursor()
 _redmine_db = psycopg2.connect(**_REDMINE_DB)
 _redmine_dbc = _redmine_db.cursor()
 
-_roundup_dbc = _roundup_db.execute(_ROUNDUP_SQL_FETCH_USERS)
+_roundup_dbc.execute(_ROUNDUP_SQL_FETCH_USERS)
 for user in _roundup_dbc.fetchall():
     username = _decode_mime(user[5])
     if username in ["admin", "anonymous"]:
@@ -70,6 +167,23 @@ for user in _roundup_dbc.fetchall():
             'lastname': lastname, 'mail': mail, 'created': creationtime,
             'loggedin': lasttime}
     _redmine_dbc.execute(_REDMINE_SQL_ADD_USER, data)
+
+_roundup_dbc.execute(_ROUNDUP_SQL_FETCH_ISSUES)
+for issue in _roundup_dbc.fetchall():
+    activity = _decode_roundup_date(issue[0])
+    actor = _roundup_user_to_redmine_user(issue[1])
+    assignedto = _roundup_user_to_redmine_user(issue[2])  # may be ZERO!
+    creation = _decode_roundup_date(issue[3])
+    creator = _roundup_user_to_redmine_user(issue[4])
+    priority = _roundup_priority_to_redmine_priority(issue[5])
+    status = _roundup_status_to_redmine_status(issue[6])
+    title = _decode_mime(issue[7])
+
+    d = {'tracker': _REDMINE_TRACKER_ID, 'project': _REDMINE_PROJECT_ID,
+         'title': title, 'status': status, 'assignedto': assignedto,
+         'priority': priority, 'author': creator, 'created': creation,
+         'activity': activity, 'left': 1, 'right': 2}
+    _redmine_dbc.execute(_REDMINE_SQL_ADD_ISSUE, d)
 
 _redmine_db.commit()
 _redmine_db.close()
