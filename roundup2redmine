@@ -15,6 +15,7 @@ _ROUNDUP_SQL_FETCH_USER = 'SELECT _address, _username from _user where id=?;'
 _ROUNDUP_SQL_FETCH_STATUS = 'SELECT _name from _status where id=?;'
 _ROUNDUP_SQL_FETCH_PRIORITY = 'SELECT _name from _priority where id=?;'
 _ROUNDUP_SQL_FETCH_ISSUES = 'SELECT _activity, _actor, _assignedto, _creation, _creator, _priority, _status, _title, id from _issue;'
+_ROUNDUP_SQL_FETCH_MESSAGEID = 'SELECT linkid from issue_messages WHERE nodeid=? ORDER BY linkid ASC LIMIT 1;'
 
 _REDMINE_DB = {
     'database': 'redmine_default',
@@ -29,7 +30,8 @@ _REDMINE_SQL_ADD_USER = "INSERT INTO users (login, firstname, lastname, mail, cr
 _REDMINE_SQL_FETCH_USER = "SELECT id FROM users WHERE login=%(login)s AND mail=%(mail)s;"
 _REDMINE_SQL_FETCH_STATUS = "SELECT id FROM issue_statuses WHERE name=%(name)s;"
 _REDMINE_SQL_FETCH_PRIORITY = "SELECT id FROM enumerations WHERE name=%(name)s AND type='IssuePriority';"
-_REDMINE_SQL_ADD_ISSUE = "INSERT INTO issues (tracker_id, project_id, subject, description, status_id, assigned_to_id, priority_id, author_id, created_on, updated_on, lft, rgt) VALUES(%(tracker)s, %(project)s, %(title)s, '', %(status)s, %(assignedto)s, %(priority)s, %(author)s, %(created)s, %(activity)s, %(left)s, %(right)s);"
+_REDMINE_SQL_ADD_ISSUE = "INSERT INTO issues (tracker_id, project_id, subject, description, status_id, assigned_to_id, priority_id, author_id, created_on, updated_on, lft, rgt) VALUES(%(tracker)s, %(project)s, %(title)s, %(msg)s, %(status)s, %(assignedto)s, %(priority)s, %(author)s, %(created)s, %(activity)s, %(left)s, %(right)s);"
+_REDMINE_SQL_ADD_JOURNAL = "INSERT INTO journal (journalized_id, journalized_type, user_id, notes, created_on) VALUES (%(issue)s, 'Issue', %(author)s, %(msg)s, %(created)s)"
 
 _status_map = {
     'unread': 'New',
@@ -142,6 +144,24 @@ def _roundup_priority_to_redmine_priority(pid):
     else:
         return 0
 
+
+def _get_roundup_msg(mid):
+    msg = ''
+    folder = str(int(mid)/1000)
+    filepath = os.path.join(_ROUNDUP_FILES, 'msg', folder, 'msg%s' % mid)
+    with open(filepath, 'r') as f:
+        msg = f.read()
+    return msg.decode('utf-8', 'ignore')
+
+
+def _get_roundup_msg_for_issue(iid):
+    _roundup_dbc.execute(_ROUNDUP_SQL_FETCH_MESSAGEID, (iid,))
+    r = _roundup_dbc.fetchone()
+    if r:
+        return _get_roundup_msg(r[0])
+    else:
+        return ''
+
 _roundup_db = sqlite3.connect(_ROUNDUP_DB)
 _roundup_dbc = _roundup_db.cursor()
 _redmine_db = psycopg2.connect(**_REDMINE_DB)
@@ -178,11 +198,12 @@ for issue in _roundup_dbc.fetchall():
     priority = _roundup_priority_to_redmine_priority(issue[5])
     status = _roundup_status_to_redmine_status(issue[6])
     title = _decode_mime(issue[7])
+    msg = _get_roundup_msg_for_issue(issue[8])
 
     d = {'tracker': _REDMINE_TRACKER_ID, 'project': _REDMINE_PROJECT_ID,
          'title': title, 'status': status, 'assignedto': assignedto,
          'priority': priority, 'author': creator, 'created': creation,
-         'activity': activity, 'left': 1, 'right': 2}
+         'activity': activity, 'left': 1, 'right': 2, 'msg': msg}
     _redmine_dbc.execute(_REDMINE_SQL_ADD_ISSUE, d)
 
 _redmine_db.commit()
