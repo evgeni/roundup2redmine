@@ -127,13 +127,13 @@ def _roundup_status_to_redmine_status(sid):
 def _roundup_priority_to_redmine_priority(pid):
     global _priority
     if not pid:
-        return 0
+        return 1
     if pid in _priority:
         return _priority[pid]
     _roundup_dbc.execute(_ROUNDUP_SQL_FETCH_PRIORITY, (pid,))
     r = _roundup_dbc.fetchone()
     if r[0] not in _priority_map:
-        return 0
+        return 1
     p = _priority_map[r[0]]
     d = {'name': p}
     _redmine_dbc.execute(_REDMINE_SQL_FETCH_PRIORITY, d)
@@ -142,7 +142,7 @@ def _roundup_priority_to_redmine_priority(pid):
         _priority[pid] = r[0]
         return r[0]
     else:
-        return 0
+        return 1
 
 
 def _get_roundup_msg(mid):
