@@ -204,7 +204,6 @@ for user in _roundup_dbc.fetchall():
             firstname, lastname = _decode_mime(user[3]), ""
     else:
         firstname, lastname = _decode_mime(user[5]), ""
-    print username, mail, firstname, lastname, lasttime
     data = {'username': username, 'firstname': firstname,
             'lastname': lastname, 'mail': mail, 'created': creationtime,
             'loggedin': lasttime}
