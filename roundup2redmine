@@ -41,6 +41,7 @@ _REDMINE_SQL_FETCH_PRIORITY = "SELECT id FROM enumerations WHERE name=%(name)s A
 _REDMINE_SQL_ADD_ISSUE = "INSERT INTO issues (tracker_id, project_id, subject, description, status_id, assigned_to_id, priority_id, author_id, created_on, updated_on, lft, rgt) VALUES(%(tracker)s, %(project)s, %(title)s, %(msg)s, %(status)s, %(assignedto)s, %(priority)s, %(author)s, %(created)s, %(activity)s, %(left)s, %(right)s) RETURNING id;"
 _REDMINE_SQL_ADD_JOURNAL = "INSERT INTO journals (journalized_id, journalized_type, user_id, notes, created_on) VALUES (%(issue)s, 'Issue', %(author)s, %(msg)s, %(created)s)"
 _REDMINE_SQL_ADD_FILE = "INSERT INTO attachments (container_id, container_type, filename, disk_filename, filesize, content_type, digest, author_id, created_on, description) VALUES (%(issue)s, 'Issue', %(filename)s, %(disk_filename)s, %(filesize)s, %(content_type)s, %(digest)s, %(author)s, %(created)s, '')"
+_REDMINE_SQL_FETCH_TRACKER = "SELECT id FROM trackers WHERE name=%(name)s;"
 
 _status_map = {
     'unread': 'New',
@@ -67,9 +68,20 @@ _priority_map = {  # most not perfect
     'fixed-in-git': 'Normal',
 }
 
+_tracker_map = {
+    'critical': 'Bug',
+    'urgent': 'Bug',
+    'bug': 'Bug',
+    'feature': 'Feature',
+    'wish': 'Bug',
+    'package': 'Feature',
+    'fixed-in-git': 'Bug',
+}
+
 _users = {}
 _status = {}
 _priority = {}
+_tracker = {}
 
 
 def _decode_mime(string):
@@ -184,6 +196,28 @@ def _get_roundup_file(fid):
     s = len(content)
     return (filepath, s, h)
 
+
+def _roundup_priority_to_redmine_tracker(pid):
+    global _tracker
+    if not pid:
+        return 1
+    if pid in _tracker:
+        return _tracker[pid]
+    _roundup_dbc.execute(_ROUNDUP_SQL_FETCH_PRIORITY, (pid,))
+    r = _roundup_dbc.fetchone()
+    if r[0] not in _tracker_map:
+        return 1
+    p = _tracker_map[r[0]]
+    d = {'name': p}
+    _redmine_dbc.execute(_REDMINE_SQL_FETCH_TRACKER, d)
+    r = _redmine_dbc.fetchone()
+    if r:
+        _tracker[pid] = r[0]
+        return r[0]
+    else:
+        return 1
+
+
 _roundup_db = sqlite3.connect(_ROUNDUP_DB)
 _roundup_dbc = _roundup_db.cursor()
 _redmine_db = psycopg2.connect(**_REDMINE_DB)
@@ -217,11 +251,12 @@ for issue in _roundup_dbc.fetchall():
     creation = _decode_roundup_date(issue[3])
     creator = _roundup_user_to_redmine_user(issue[4])
     priority = _roundup_priority_to_redmine_priority(issue[5])
+    tracker = _roundup_priority_to_redmine_tracker(issue[5])
     status = _roundup_status_to_redmine_status(issue[6])
     title = _decode_mime(issue[7])
     msg = _get_roundup_msg_for_issue(issue[8])
 
-    d = {'tracker': _REDMINE_TRACKER_ID, 'project': _REDMINE_PROJECT_ID,
+    d = {'tracker': tracker, 'project': _REDMINE_PROJECT_ID,
          'title': title, 'status': status, 'assignedto': assignedto,
          'priority': priority, 'author': creator, 'created': creation,
          'activity': activity, 'left': 1, 'right': 2, 'msg': msg}
